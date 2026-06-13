@@ -7,7 +7,13 @@ vm_ram_mb: 6144
 vm_vcpus: 4
 vm_cpu_model: "host-passthrough"
 vm_machine: "pc"
-vm_osinfo: "ubuntu24.04"
+# Ubuntu installer release selection.
+ubuntu_release: "24.04"
+ubuntu_version: "24.04.4"
+ubuntu_codename: "noble"
+ubuntu_arch: "amd64"
+ubuntu_osinfo: "ubuntu24.04"
+vm_osinfo: "{{ ubuntu_osinfo }}"
 
 # Storage. qcow2 is self-contained and easiest to grow.
 # Set vm_disk_backend to "lvm" to reuse a raw LV instead.
@@ -19,8 +25,20 @@ vm_lvm_path: "/dev/vg_virtualmachines/codexvm"
 vm_disk_path: "{{ vm_qcow2_path if vm_disk_backend == 'qcow2' else vm_lvm_path }}"
 vm_force_recreate: false
 
-# Ubuntu installer
-iso_path: "/var/lib/libvirt/boot/ubuntu-24.04.4-live-server-amd64.iso"
+# Ubuntu netboot installer.
+# The netboot tarball is much smaller than the live-server ISO and boots the
+# installer kernel/initrd directly. The installer downloads what it needs.
+download_netboot_when_missing: true
+netboot_name: "ubuntu-{{ ubuntu_version }}-netboot-{{ ubuntu_arch }}.tar.gz"
+netboot_tarball_path: "/var/lib/libvirt/boot/{{ netboot_name }}"
+netboot_url: "https://releases.ubuntu.com/{{ ubuntu_version }}/{{ netboot_name }}"
+netboot_extract_dir: "/var/lib/libvirt/boot/{{ netboot_name | regex_replace('\\.tar\\.gz$', '') }}"
+netboot_kernel_path: "{{ netboot_extract_dir }}/{{ ubuntu_arch }}/linux"
+netboot_initrd_path: "{{ netboot_extract_dir }}/{{ ubuntu_arch }}/initrd"
+
+# Optional pinned checksum. Leave empty to skip get_url checksum enforcement.
+# Fill this after manually verifying a trusted download if you want pinning.
+netboot_sha256: ""
 seed_work_dir: "{{ playbook_dir }}/generated"
 seed_iso_path: "{{ seed_work_dir }}/codexvm-seed.iso"
 seed_user_data_path: "{{ seed_work_dir }}/user-data"

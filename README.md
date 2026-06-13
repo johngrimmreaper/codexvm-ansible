@@ -1,6 +1,6 @@
 # CodexVM Ansible project
 
-This project builds a headless, isolated Ubuntu 24.04.4 LTS virtual machine for OpenAI Codex CLI work.
+This project builds a headless, isolated Ubuntu 24.04.4 LTS virtual machine for OpenAI Codex CLI work using Ubuntu's small netboot tarball instead of the full live-server ISO.
 
 ## Designed disk geometry
 
@@ -27,13 +27,12 @@ The VM isolates host files, but Codex still sends relevant prompts and project c
 
 The playbook installs the KVM/libvirt tools it needs. Before running it:
 
-1. Put the Ubuntu Server ISO at:
+1. Ensure the public key configured by `codex_ssh_pubkey_path` exists.
+2. Check that `192.168.122.60` is unused on the libvirt `default` network.
+3. Review `group_vars/all.yml`.
 
-   `/var/lib/libvirt/boot/ubuntu-24.04.4-live-server-amd64.iso`
-
-2. Ensure the public key configured by `codex_ssh_pubkey_path` exists.
-3. Check that `192.168.122.60` is unused on the libvirt `default` network.
-4. Review `group_vars/all.yml`.
+By default the playbook downloads the Ubuntu 24.04.4 AMD64 netboot tarball to
+`netboot_tarball_path` and extracts the installer kernel/initrd from it.
 
 The default disk is a sparse qcow2 image at `/var/lib/libvirt/images/codexvm.qcow2`. To use a raw LVM volume, set `vm_disk_backend: lvm` and create `/dev/vg_virtualmachines/codexvm` at 70 GiB first.
 
@@ -96,6 +95,15 @@ ansible-playbook -i inventory.ini grow-disk.yml -e new_disk_size_gb=100 -vv
 ```
 
 After a successful growth, update `vm_disk_size_gb` in `group_vars/all.yml` to the new value.
+
+## Netboot installer media
+
+This project intentionally uses the Ubuntu netboot tarball, not the full
+live-server ISO. The VM boots the installer kernel and initrd directly with
+`virt-install --install kernel=...,initrd=...`.
+
+The NoCloud seed ISO remains attached as a small virtual CD-ROM so the installer
+can consume the rendered autoinstall `user-data` and `meta-data`.
 
 ## Recreate intentionally
 

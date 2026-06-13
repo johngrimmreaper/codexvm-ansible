@@ -27,24 +27,79 @@
     - name: Install KVM and autoinstall host dependencies
       ansible.builtin.apt:
         name:
+          - ca-certificates
           - cloud-image-utils
           - libvirt-clients
           - libvirt-daemon-system
           - qemu-kvm
           - qemu-utils
+          - tar
           - virtinst
         state: present
         update_cache: true
 
-    - name: Verify Ubuntu installer ISO exists
-      ansible.builtin.stat:
-        path: "{{ iso_path }}"
-      register: iso_stat
+    - name: Ensure libvirt boot media directory exists
+      ansible.builtin.file:
+        path: "{{ netboot_tarball_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
 
-    - name: Stop when the installer ISO is missing
+    - name: Download Ubuntu netboot tarball when missing
+      ansible.builtin.get_url:
+        url: "{{ netboot_url }}"
+        dest: "{{ netboot_tarball_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+        checksum: "{{ ('sha256:' ~ netboot_sha256) if (netboot_sha256 | length > 0) else omit }}"
+      when: download_netboot_when_missing | bool
+
+    - name: Verify Ubuntu netboot tarball exists
+      ansible.builtin.stat:
+        path: "{{ netboot_tarball_path }}"
+      register: netboot_tarball_stat
+
+    - name: Stop when the netboot tarball is missing
       ansible.builtin.fail:
-        msg: "ISO not found at {{ iso_path }}. Download Ubuntu 24.04.4 Server or change iso_path."
-      when: not iso_stat.stat.exists
+        msg: >-
+          Netboot tarball not found at {{ netboot_tarball_path }}.
+          Download it from {{ netboot_url }} or enable download_netboot_when_missing.
+      when: not netboot_tarball_stat.stat.exists
+
+    - name: Ensure Ubuntu netboot extraction directory exists
+      ansible.builtin.file:
+        path: "{{ netboot_extract_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Extract Ubuntu netboot tarball
+      ansible.builtin.unarchive:
+        src: "{{ netboot_tarball_path }}"
+        dest: "{{ netboot_extract_dir }}"
+        remote_src: true
+        creates: "{{ netboot_kernel_path }}"
+
+    - name: Verify Ubuntu netboot kernel exists
+      ansible.builtin.stat:
+        path: "{{ netboot_kernel_path }}"
+      register: netboot_kernel_stat
+
+    - name: Verify Ubuntu netboot initrd exists
+      ansible.builtin.stat:
+        path: "{{ netboot_initrd_path }}"
+      register: netboot_initrd_stat
+
+    - name: Stop when extracted netboot files are missing
+      ansible.builtin.fail:
+        msg: >-
+          Expected netboot kernel/initrd were not found.
+          Kernel: {{ netboot_kernel_path }}
+          Initrd: {{ netboot_initrd_path }}
+      when: not netboot_kernel_stat.stat.exists or not netboot_initrd_stat.stat.exists
 
     - name: Check whether the VM already exists
       ansible.builtin.command: "virsh dominfo {{ vm_name }}"
@@ -198,11 +253,9 @@
           - --console
           - pty,target_type=serial
           - --boot
-          - cdrom,hd,menu=on
-          - --location
-          - "{{ iso_path }}"
-          - --extra-args
-          - "autoinstall console=ttyS0,115200n8 serial"
+          - hd,menu=on
+          - --install
+          - "kernel={{ netboot_kernel_path }},initrd={{ netboot_initrd_path }},kernel_args=autoinstall ds=nocloud console=ttyS0,115200n8 serial"
           - --noautoconsole
       when: vm_exists_after_recreate.rc != 0
       changed_when: true
