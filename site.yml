@@ -316,6 +316,84 @@
   become: true
 
   tasks:
+    - name: Check whether Ubuntu universe repository is enabled
+      ansible.builtin.shell: |
+        grep -RhsE '(^Components: .*\\buniverse\\b)|(^deb .*\\buniverse\\b)' \
+          /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: codex_universe_enabled
+      changed_when: false
+      when: codex_enable_universe | bool
+
+    - name: Install repository management tools
+      ansible.builtin.apt:
+        name: software-properties-common
+        state: present
+        update_cache: true
+      when:
+        - codex_enable_universe | bool
+        - (codex_universe_enabled.stdout | default('')) | length == 0
+
+    - name: Enable Ubuntu universe repository
+      ansible.builtin.command: add-apt-repository -y universe
+      register: codex_enable_universe_result
+      changed_when: true
+      when:
+        - codex_enable_universe | bool
+        - (codex_universe_enabled.stdout | default('')) | length == 0
+
+    - name: Install interactive terminal editor tools
+      ansible.builtin.apt:
+        name: "{{ codex_editor_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Set system default editor alternative
+      ansible.builtin.shell: |
+        set -euo pipefail
+        editor_bin="$(command -v "$CODEX_DEFAULT_EDITOR")"
+        editor_path="$(readlink -f "$editor_bin")"
+        current="$(update-alternatives --query editor 2>/dev/null | awk -F': ' '/^Value:/{print $2}')"
+        current="$(readlink -f "$current" 2>/dev/null || true)"
+
+        if [ "$current" = "$editor_path" ]; then
+            echo "unchanged $editor_path"
+            exit 0
+        fi
+
+        update-alternatives --set editor "$editor_path"
+        echo "changed $editor_path"
+      args:
+        executable: /bin/bash
+      environment:
+        CODEX_DEFAULT_EDITOR: "{{ codex_default_editor }}"
+      register: codex_editor_alternative
+      changed_when: "'changed ' in codex_editor_alternative.stdout"
+      when: codex_default_editor | length > 0
+
+    - name: Set codex shell editor environment
+      ansible.builtin.copy:
+        dest: /etc/profile.d/90-codex-editor.sh
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          export EDITOR={{ codex_default_editor | quote }}
+          export VISUAL={{ codex_default_editor | quote }}
+
+    - name: Set EDITOR in system environment
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^EDITOR='
+        line: "EDITOR={{ codex_default_editor }}"
+
+    - name: Set VISUAL in system environment
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^VISUAL='
+        line: "VISUAL={{ codex_default_editor }}"
+
     - name: Read installed block-device layout
       ansible.builtin.command: lsblk -nrpo NAME,TYPE,FSTYPE,MOUNTPOINT /dev/vda
       register: codexvm_lsblk
@@ -364,6 +442,7 @@
         - { name: init.defaultBranch, value: main }
         - { name: pull.ff, value: only }
         - { name: fetch.prune, value: 'true' }
+        - { name: core.editor, value: "{{ codex_default_editor }}" }
       tags: [never]
 
     - name: Configure conservative Git defaults without external collections
@@ -381,6 +460,7 @@
         - { name: init.defaultBranch, value: main }
         - { name: pull.ff, value: only }
         - { name: fetch.prune, value: 'true' }
+        - { name: core.editor, value: "{{ codex_default_editor }}" }
       changed_when: false
 
     - name: Clone explicitly approved projects

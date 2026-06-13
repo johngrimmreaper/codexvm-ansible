@@ -123,6 +123,16 @@ codex_base_packages:
   - zip
 codex_extra_packages: []
 
+# Interactive terminal defaults for the shared VM image.
+# Override codex_default_editor to choose another editor.
+codex_enable_universe: true
+codex_default_editor: "vim"
+codex_editor_packages:
+  - vim
+  - nano
+  - alpine-pico
+  - mc
+
 # Repositories that are explicitly approved for this VM.
 # Leave empty until each project is intentionally added.
 codex_projects: []
