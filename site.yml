@@ -255,7 +255,7 @@
           - --boot
           - hd,menu=on
           - --install
-          - "kernel={{ netboot_kernel_path }},initrd={{ netboot_initrd_path }},kernel_args=autoinstall ds=nocloud console=ttyS0,115200n8 serial"
+          - "kernel={{ netboot_kernel_path }},initrd={{ netboot_initrd_path }},kernel_args={{ netboot_kernel_args }}"
           - --noautoconsole
       when: vm_exists_after_recreate.rc != 0
       changed_when: true

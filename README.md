@@ -98,9 +98,13 @@ After a successful growth, update `vm_disk_size_gb` in `group_vars/all.yml` to t
 
 ## Netboot installer media
 
-This project intentionally uses the Ubuntu netboot tarball, not the full
-live-server ISO. The VM boots the installer kernel and initrd directly with
-`virt-install --install kernel=...,initrd=...`.
+This project intentionally uses the Ubuntu netboot tarball as host-side boot
+media, not the full live-server ISO. The VM boots the installer kernel and
+initrd directly with `virt-install --install kernel=...,initrd=...`.
+
+The netboot initrd still needs a live-server ISO URL in its kernel command line.
+That ISO is downloaded by the installer inside the VM and mounted as the live
+filesystem.
 
 The NoCloud seed ISO is written under `/var/lib/libvirt/boot` and attached as
 a small virtual CD-ROM so the installer can consume the rendered autoinstall

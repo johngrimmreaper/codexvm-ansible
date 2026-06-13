@@ -36,6 +36,22 @@ netboot_extract_dir: "/var/lib/libvirt/boot/{{ netboot_name | regex_replace('\\.
 netboot_kernel_path: "{{ netboot_extract_dir }}/{{ ubuntu_arch }}/linux"
 netboot_initrd_path: "{{ netboot_extract_dir }}/{{ ubuntu_arch }}/initrd"
 
+# The netboot initrd must download the live-server ISO and mount it as the
+# installer live filesystem. This URL is consumed inside the VM by the initrd;
+# the playbook does not download this ISO to the host.
+live_server_iso_name: "ubuntu-{{ ubuntu_version }}-live-server-{{ ubuntu_arch }}.iso"
+live_server_iso_url: "https://releases.ubuntu.com/{{ ubuntu_version }}/{{ live_server_iso_name }}"
+netboot_kernel_args: >-
+  autoinstall
+  ds=nocloud
+  cloud-config-url=/dev/null
+  ip=dhcp
+  root=/dev/ram0
+  ramdisk_size=1500000
+  url={{ live_server_iso_url }}
+  console=ttyS0,115200n8
+  serial
+
 # Optional pinned checksum. Leave empty to skip get_url checksum enforcement.
 # Fill this after manually verifying a trusted download if you want pinning.
 netboot_sha256: ""
