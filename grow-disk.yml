@@ -1,0 +1,107 @@
+---
+- name: Grow the Codex VM virtual disk
+  hosts: kvm_host
+  gather_facts: false
+  become: true
+
+  vars:
+    new_disk_size_gb: 100
+
+  tasks:
+    - name: Require a larger target size
+      ansible.builtin.assert:
+        that:
+          - new_disk_size_gb | int > vm_disk_size_gb | int
+        fail_msg: "new_disk_size_gb must be larger than current vm_disk_size_gb={{ vm_disk_size_gb }}."
+
+    - name: Read VM state
+      ansible.builtin.command: "virsh domstate {{ vm_name }}"
+      register: grow_vm_state
+      changed_when: false
+
+    - name: Extend raw LVM backing volume
+      ansible.builtin.command:
+        argv:
+          - lvextend
+          - --yes
+          - -L
+          - "{{ new_disk_size_gb }}G"
+          - "{{ vm_lvm_path }}"
+      when: vm_disk_backend == 'lvm'
+      changed_when: true
+
+    - name: Resize a running virtual disk through libvirt
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - blockresize
+          - "{{ vm_name }}"
+          - "{{ vm_disk_path }}"
+          - "{{ new_disk_size_gb }}G"
+      when: "'running' in grow_vm_state.stdout"
+      changed_when: true
+
+    - name: Resize an offline qcow2 image
+      ansible.builtin.command:
+        argv:
+          - qemu-img
+          - resize
+          - "{{ vm_qcow2_path }}"
+          - "{{ new_disk_size_gb }}G"
+      when:
+        - vm_disk_backend == 'qcow2'
+        - "'running' not in grow_vm_state.stdout"
+      changed_when: true
+
+    - name: Start VM after offline growth
+      ansible.builtin.command: "virsh start {{ vm_name }}"
+      when: "'running' not in grow_vm_state.stdout"
+      changed_when: true
+
+    - name: Wait for SSH after disk growth
+      ansible.builtin.wait_for:
+        host: "{{ vm_ip }}"
+        port: 22
+        delay: 5
+        timeout: 300
+
+- name: Grow partition 2 and the ext4 root filesystem
+  hosts: codex_vm
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Verify swap remains partition 1
+      ansible.builtin.shell: |
+        set -e
+        test "$(lsblk -nro FSTYPE /dev/vda1)" = "swap"
+        test "$(findmnt -nro SOURCE /)" = "/dev/vda2"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Grow root partition into trailing free space
+      ansible.builtin.command: growpart /dev/vda 2
+      register: growpart_result
+      changed_when: "'CHANGED:' in growpart_result.stdout"
+      failed_when:
+        - growpart_result.rc != 0
+        - "'NOCHANGE:' not in growpart_result.stdout"
+
+    - name: Re-read the partition table
+      ansible.builtin.command: partprobe /dev/vda
+      changed_when: false
+
+    - name: Grow the online ext4 root filesystem
+      ansible.builtin.command: resize2fs /dev/vda2
+      register: resize2fs_result
+      changed_when: "'Nothing to do' not in resize2fs_result.stdout"
+
+    - name: Show final root size
+      ansible.builtin.command: df -hT /
+      register: final_root_size
+      changed_when: false
+
+    - name: Report growth result
+      ansible.builtin.debug:
+        var: final_root_size.stdout_lines

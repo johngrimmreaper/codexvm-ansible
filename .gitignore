@@ -1,0 +1,21 @@
+# Generated autoinstall / cloud-init / ISO artifacts
+/generated/
+/*.iso
+/*.img
+/*.qcow2
+/*.raw
+
+# Python / Ansible local noise
+__pycache__/
+*.pyc
+*.retry
+
+# Editor / OS noise
+*~
+.*.swp
+.DS_Store
+
+# Local secret/temp files
+*.secret
+*.tmp
+.env

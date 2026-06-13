@@ -1,0 +1,484 @@
+---
+- name: Create or reuse the isolated Codex VM
+  hosts: kvm_host
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Validate requested disk geometry
+      ansible.builtin.assert:
+        that:
+          - vm_disk_backend in ['qcow2', 'lvm']
+          - vm_disk_size_gb | int > vm_swap_size_gb | int + 20
+          - vm_swap_size_gb | int > 0
+        fail_msg: >-
+          The disk must leave at least 20 GiB for the root filesystem after
+          the fixed first swap partition.
+
+    - name: Refuse placeholder password hash
+      ansible.builtin.assert:
+        that:
+          - codex_password_crypted != '$6$REPLACE_ME'
+          - codex_password_crypted is match('^\\$[256y]\\$|^\\$6\\$')
+        fail_msg: >-
+          Supply codex_password_crypted with scripts/run-install.sh or an
+          encrypted extra-vars file.
+
+    - name: Install KVM and autoinstall host dependencies
+      ansible.builtin.apt:
+        name:
+          - cloud-image-utils
+          - libvirt-clients
+          - libvirt-daemon-system
+          - qemu-kvm
+          - qemu-utils
+          - virtinst
+        state: present
+        update_cache: true
+
+    - name: Verify Ubuntu installer ISO exists
+      ansible.builtin.stat:
+        path: "{{ iso_path }}"
+      register: iso_stat
+
+    - name: Stop when the installer ISO is missing
+      ansible.builtin.fail:
+        msg: "ISO not found at {{ iso_path }}. Download Ubuntu 24.04.4 Server or change iso_path."
+      when: not iso_stat.stat.exists
+
+    - name: Check whether the VM already exists
+      ansible.builtin.command: "virsh dominfo {{ vm_name }}"
+      register: vm_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Destroy existing VM when force recreation is requested
+      ansible.builtin.command: "virsh destroy {{ vm_name }}"
+      when:
+        - vm_force_recreate | bool
+        - vm_exists.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Undefine existing VM when force recreation is requested
+      ansible.builtin.command: "virsh undefine {{ vm_name }} --nvram"
+      when:
+        - vm_force_recreate | bool
+        - vm_exists.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Remove qcow2 disk when force recreation is requested
+      ansible.builtin.file:
+        path: "{{ vm_qcow2_path }}"
+        state: absent
+      when:
+        - vm_force_recreate | bool
+        - vm_disk_backend == 'qcow2'
+
+    - name: Refresh VM existence after optional recreation
+      ansible.builtin.command: "virsh dominfo {{ vm_name }}"
+      register: vm_exists_after_recreate
+      failed_when: false
+      changed_when: false
+
+    - name: Verify raw LVM disk exists
+      ansible.builtin.stat:
+        path: "{{ vm_lvm_path }}"
+      register: lvm_disk_stat
+      when: vm_disk_backend == 'lvm'
+
+    - name: Stop when configured LVM disk is missing
+      ansible.builtin.fail:
+        msg: >-
+          Raw LV {{ vm_lvm_path }} does not exist. Create it at
+          {{ vm_disk_size_gb }}G or select vm_disk_backend=qcow2.
+      when:
+        - vm_disk_backend == 'lvm'
+        - not lvm_disk_stat.stat.exists
+
+    - name: Ensure libvirt image directory exists
+      ansible.builtin.file:
+        path: "{{ vm_qcow2_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: vm_disk_backend == 'qcow2'
+
+    - name: Check qcow2 disk
+      ansible.builtin.stat:
+        path: "{{ vm_qcow2_path }}"
+      register: qcow2_stat
+      when: vm_disk_backend == 'qcow2'
+
+    - name: Create sparse qcow2 disk
+      ansible.builtin.command:
+        argv:
+          - qemu-img
+          - create
+          - -f
+          - qcow2
+          - -o
+          - lazy_refcounts=on
+          - "{{ vm_qcow2_path }}"
+          - "{{ vm_disk_size_gb }}G"
+      when:
+        - vm_disk_backend == 'qcow2'
+        - not qcow2_stat.stat.exists
+      changed_when: true
+
+    - name: Create autoinstall working directory
+      ansible.builtin.file:
+        path: "{{ seed_work_dir }}"
+        state: directory
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        mode: '0700'
+
+    - name: Render Ubuntu autoinstall user-data
+      ansible.builtin.template:
+        src: templates/user-data.j2
+        dest: "{{ seed_user_data_path }}"
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Render Ubuntu autoinstall meta-data
+      ansible.builtin.template:
+        src: templates/meta-data.j2
+        dest: "{{ seed_meta_data_path }}"
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        mode: '0600'
+
+    - name: Build NoCloud seed ISO
+      ansible.builtin.command:
+        argv:
+          - cloud-localds
+          - "{{ seed_iso_path }}"
+          - "{{ seed_user_data_path }}"
+          - "{{ seed_meta_data_path }}"
+      when: vm_exists_after_recreate.rc != 0
+      changed_when: true
+
+    - name: Start unattended legacy-BIOS Ubuntu installation
+      ansible.builtin.command:
+        argv:
+          - virt-install
+          - --connect
+          - qemu:///system
+          - --virt-type
+          - kvm
+          - --name
+          - "{{ vm_name }}"
+          - --machine
+          - "{{ vm_machine }}"
+          - --memory
+          - "{{ vm_ram_mb }}"
+          - --vcpus
+          - "{{ vm_vcpus }}"
+          - --cpu
+          - "{{ vm_cpu_model }}"
+          - --osinfo
+          - "{{ vm_osinfo }}"
+          - --disk
+          - "path={{ vm_disk_path }},format={{ 'qcow2' if vm_disk_backend == 'qcow2' else 'raw' }},bus=virtio,cache=none,discard=unmap"
+          - --disk
+          - "path={{ seed_iso_path }},device=cdrom,readonly=on"
+          - --network
+          - "network={{ vm_network }},model=virtio,mac={{ vm_mac }}"
+          - --rng
+          - /dev/urandom,model=virtio
+          - --memballoon
+          - virtio
+          - --graphics
+          - none
+          - --console
+          - pty,target_type=serial
+          - --boot
+          - cdrom,hd,menu=on
+          - --location
+          - "{{ iso_path }}"
+          - --extra-args
+          - "autoinstall console=ttyS0,115200n8 serial"
+          - --noautoconsole
+      when: vm_exists_after_recreate.rc != 0
+      changed_when: true
+
+    - name: Read VM state
+      ansible.builtin.command: "virsh domstate {{ vm_name }}"
+      register: vm_state
+      changed_when: false
+      failed_when: false
+
+    - name: Start an existing stopped VM
+      ansible.builtin.command: "virsh start {{ vm_name }}"
+      when:
+        - vm_state.rc == 0
+        - "'shut off' in vm_state.stdout"
+      changed_when: true
+
+    - name: Wait for the installer to finish and SSH to start
+      ansible.builtin.wait_for:
+        host: "{{ vm_ip }}"
+        port: 22
+        delay: 20
+        timeout: 7200
+
+    - name: Remove stale SSH host keys for the VM
+      ansible.builtin.shell: |
+        set -e
+        KH="{{ lookup('env', 'HOME') }}/.ssh/known_hosts"
+        install -d -m 0700 "$(dirname "$KH")"
+        touch "$KH"
+        ssh-keygen -R "{{ vm_ip }}" -f "$KH" >/dev/null 2>&1 || true
+        ssh-keygen -R "[{{ vm_ip }}]:22" -f "$KH" >/dev/null 2>&1 || true
+        ssh-keygen -R "{{ vm_hostname }}" -f "$KH" >/dev/null 2>&1 || true
+      args:
+        executable: /bin/bash
+      become: false
+      changed_when: false
+
+    - name: Trust the newly installed VM host key
+      ansible.builtin.shell: |
+        set -e
+        KH="{{ lookup('env', 'HOME') }}/.ssh/known_hosts"
+        for attempt in 1 2 3 4 5; do
+          if ssh-keyscan -H -T 5 -t ed25519,rsa "{{ vm_ip }}" 2>/dev/null >> "$KH"; then
+            exit 0
+          fi
+          sleep 2
+        done
+        exit 1
+      args:
+        executable: /bin/bash
+      become: false
+      changed_when: true
+
+- name: Configure the Codex project VM
+  hosts: codex_vm
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Read installed block-device layout
+      ansible.builtin.command: lsblk -nrpo NAME,TYPE,FSTYPE,MOUNTPOINT /dev/vda
+      register: codexvm_lsblk
+      changed_when: false
+
+    - name: Enforce the required two-partition geometry
+      ansible.builtin.assert:
+        that:
+          - "'/dev/vda1 part swap' in codexvm_lsblk.stdout"
+          - "'/dev/vda2 part ext4 /' in codexvm_lsblk.stdout"
+        fail_msg: >-
+          Unexpected disk layout. Required: /dev/vda1 swap and /dev/vda2 ext4
+          mounted at /. Actual layout: {{ codexvm_lsblk.stdout }}
+
+    - name: Upgrade installed Ubuntu packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install Codex VM baseline tools
+      ansible.builtin.apt:
+        name: "{{ codex_base_packages + codex_extra_packages }}"
+        state: present
+
+    - name: Enable Git LFS
+      ansible.builtin.command: git lfs install --system
+      register: git_lfs_install
+      changed_when: "'Git LFS initialized' in git_lfs_install.stdout"
+
+    - name: Create approved-project workspace
+      ansible.builtin.file:
+        path: "{{ codex_projects_dir }}"
+        state: directory
+        owner: "{{ codex_user }}"
+        group: "{{ codex_user }}"
+        mode: '0750'
+
+    - name: Configure conservative Git defaults
+      community.general.git_config:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        scope: global
+      become_user: "{{ codex_user }}"
+      loop:
+        - { name: init.defaultBranch, value: main }
+        - { name: pull.ff, value: only }
+        - { name: fetch.prune, value: 'true' }
+      tags: [never]
+
+    - name: Configure conservative Git defaults without external collections
+      ansible.builtin.command:
+        argv:
+          - git
+          - config
+          - --global
+          - "{{ item.name }}"
+          - "{{ item.value }}"
+      become_user: "{{ codex_user }}"
+      environment:
+        HOME: "/home/{{ codex_user }}"
+      loop:
+        - { name: init.defaultBranch, value: main }
+        - { name: pull.ff, value: only }
+        - { name: fetch.prune, value: 'true' }
+      changed_when: false
+
+    - name: Clone explicitly approved projects
+      ansible.builtin.git:
+        repo: "{{ item.repo }}"
+        dest: "{{ item.dest }}"
+        version: "{{ item.version | default('main') }}"
+        update: true
+        accept_hostkey: false
+      become_user: "{{ codex_user }}"
+      environment:
+        HOME: "/home/{{ codex_user }}"
+      loop: "{{ codex_projects }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Install SSH daemon hardening fragment
+      ansible.builtin.template:
+        src: templates/99-codexvm-hardening.conf.j2
+        dest: /etc/ssh/sshd_config.d/99-codexvm-hardening.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart SSH
+
+    - name: Validate SSH daemon configuration
+      ansible.builtin.command: sshd -t
+      changed_when: false
+
+    - name: Install uncomplicated firewall
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+      when: enable_ufw | bool
+
+    - name: Set firewall default incoming policy
+      ansible.builtin.command: ufw default deny incoming
+      when: enable_ufw | bool
+      changed_when: false
+
+    - name: Set firewall default outgoing policy
+      ansible.builtin.command: ufw default allow outgoing
+      when: enable_ufw | bool
+      changed_when: false
+
+    - name: Allow SSH only from the libvirt host
+      ansible.builtin.command: "ufw allow from {{ ssh_allowed_source }} to any port 22 proto tcp"
+      when: enable_ufw | bool
+      register: ufw_allow_ssh
+      changed_when: "'Rule added' in ufw_allow_ssh.stdout"
+
+    - name: Enable firewall
+      ansible.builtin.command: ufw --force enable
+      when: enable_ufw | bool
+      register: ufw_enable
+      changed_when: "'enabled' in ufw_enable.stdout | lower"
+
+    - name: Configure automatic security updates
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+      when: enable_unattended_upgrades | bool
+
+    - name: Ensure the Codex user has a local binary directory
+      ansible.builtin.file:
+        path: "/home/{{ codex_user }}/.local/bin"
+        state: directory
+        owner: "{{ codex_user }}"
+        group: "{{ codex_user }}"
+        mode: '0750'
+
+    - name: Ensure user-local binaries are on PATH
+      ansible.builtin.blockinfile:
+        path: "/home/{{ codex_user }}/.profile"
+        owner: "{{ codex_user }}"
+        group: "{{ codex_user }}"
+        mode: '0644'
+        marker: "# {mark} ANSIBLE CODEXVM PATH"
+        block: |
+          if [ -d "$HOME/.local/bin" ]; then
+              PATH="$HOME/.local/bin:$PATH"
+          fi
+          if [ -d "$HOME/.codex/bin" ]; then
+              PATH="$HOME/.codex/bin:$PATH"
+          fi
+          export PATH
+
+    - name: Check whether Codex CLI is already installed
+      ansible.builtin.shell: command -v codex
+      args:
+        executable: /bin/bash
+      become_user: "{{ codex_user }}"
+      environment:
+        HOME: "/home/{{ codex_user }}"
+        PATH: "/home/{{ codex_user }}/.local/bin:/home/{{ codex_user }}/.codex/bin:/usr/local/bin:/usr/bin:/bin"
+      register: codex_present
+      failed_when: false
+      changed_when: false
+
+    - name: Install Codex CLI using OpenAI's standalone installer
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+      args:
+        executable: /bin/bash
+      become_user: "{{ codex_user }}"
+      environment:
+        HOME: "/home/{{ codex_user }}"
+        PATH: "/home/{{ codex_user }}/.local/bin:/home/{{ codex_user }}/.codex/bin:/usr/local/bin:/usr/bin:/bin"
+      when: codex_present.rc != 0
+      changed_when: true
+
+    - name: Verify Codex CLI installation
+      ansible.builtin.shell: codex --version
+      args:
+        executable: /bin/bash
+      become_user: "{{ codex_user }}"
+      environment:
+        HOME: "/home/{{ codex_user }}"
+        PATH: "/home/{{ codex_user }}/.local/bin:/home/{{ codex_user }}/.codex/bin:/usr/local/bin:/usr/bin:/bin"
+      register: codex_version
+      changed_when: false
+
+    - name: Configure serial and VGA console kernel arguments
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+        line: 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"'
+      notify: Update GRUB
+
+    - name: Report completed VM details
+      ansible.builtin.debug:
+        msg:
+          - "Codex VM is ready at {{ vm_ip }}."
+          - "Disk: {{ vm_disk_size_gb }} GiB total; /dev/vda1={{ vm_swap_size_gb }} GiB swap; /dev/vda2=ext4 root."
+          - "Codex installed: {{ codex_version.stdout }}"
+          - "Connect: ssh {{ codex_user }}@{{ vm_ip }}"
+          - "Then authenticate without opening a VM browser: codex login --device-auth"
+          - "Projects directory: {{ codex_projects_dir }}"
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Update GRUB
+      ansible.builtin.command: update-grub
+      changed_when: true

@@ -1,0 +1,101 @@
+#cloud-config
+autoinstall:
+  version: 1
+  refresh-installer:
+    update: false
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: UTC
+  source:
+    id: ubuntu-server-minimal
+    search_drivers: false
+  identity:
+    hostname: "{{ vm_hostname }}"
+    realname: "{{ codex_fullname }}"
+    username: "{{ codex_user }}"
+    password: "{{ codex_password_crypted }}"
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - "{{ codex_ssh_pubkey }}"
+  network:
+    version: 2
+    ethernets:
+      codexnic:
+        match:
+          macaddress: "{{ vm_mac }}"
+        set-name: enp1s0
+        dhcp4: false
+        addresses:
+          - "{{ vm_ip }}/{{ vm_prefix }}"
+        routes:
+          - to: default
+            via: "{{ vm_gateway }}"
+        nameservers:
+          addresses:
+{% for dns in vm_dns_servers %}
+            - "{{ dns }}"
+{% endfor %}
+  apt:
+    preserve_sources_list: false
+    mirror-selection:
+      primary:
+        - uri: "http://archive.ubuntu.com/ubuntu"
+          arches: [amd64]
+    fallback: abort
+    geoip: false
+  storage:
+    swap:
+      size: 0
+    config:
+      - id: disk-vda
+        type: disk
+        path: /dev/vda
+        ptable: msdos
+        preserve: false
+        wipe: superblock-recursive
+        grub_device: true
+      - id: partition-swap
+        type: partition
+        device: disk-vda
+        number: 1
+        size: "{{ vm_swap_size_gb }}G"
+        flag: swap
+        preserve: false
+        wipe: superblock
+      - id: format-swap
+        type: format
+        volume: partition-swap
+        fstype: swap
+        preserve: false
+      - id: mount-swap
+        type: mount
+        device: format-swap
+        path: none
+      - id: partition-root
+        type: partition
+        device: disk-vda
+        number: 2
+        size: -1
+        flag: boot
+        preserve: false
+        wipe: superblock
+      - id: format-root
+        type: format
+        volume: partition-root
+        fstype: ext4
+        label: rootfs
+        preserve: false
+      - id: mount-root
+        type: mount
+        device: format-root
+        path: /
+  packages:
+    - ca-certificates
+    - openssh-server
+    - python3
+    - sudo
+  updates: security
+  shutdown: reboot

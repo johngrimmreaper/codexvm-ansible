@@ -1,0 +1,105 @@
+---
+# VM identity and compute
+vm_name: "CodexVM"
+vm_hostname: "codexvm"
+vm_domain: "local"
+vm_ram_mb: 6144
+vm_vcpus: 4
+vm_cpu_model: "host-passthrough"
+vm_machine: "pc"
+vm_osinfo: "ubuntu24.04"
+
+# Storage. qcow2 is self-contained and easiest to grow.
+# Set vm_disk_backend to "lvm" to reuse a raw LV instead.
+vm_disk_backend: "qcow2"
+vm_disk_size_gb: 70
+vm_swap_size_gb: 8
+vm_qcow2_path: "/var/lib/libvirt/images/codexvm.qcow2"
+vm_lvm_path: "/dev/vg_virtualmachines/codexvm"
+vm_disk_path: "{{ vm_qcow2_path if vm_disk_backend == 'qcow2' else vm_lvm_path }}"
+vm_force_recreate: false
+
+# Ubuntu installer
+iso_path: "/var/lib/libvirt/boot/ubuntu-24.04.4-live-server-amd64.iso"
+seed_work_dir: "{{ playbook_dir }}/generated"
+seed_iso_path: "{{ seed_work_dir }}/codexvm-seed.iso"
+seed_user_data_path: "{{ seed_work_dir }}/user-data"
+seed_meta_data_path: "{{ seed_work_dir }}/meta-data"
+cleanup_seed_files_after_install: false
+
+# Libvirt network. The MAC is fixed so autoinstall can identify the NIC.
+vm_network: "default"
+vm_mac: "52:54:00:cd:58:60"
+vm_ip: "192.168.122.60"
+vm_prefix: 24
+vm_gateway: "192.168.122.1"
+vm_dns_servers:
+  - "1.1.1.1"
+  - "8.8.8.8"
+
+# Guest account. Supply codex_password_crypted at runtime.
+codex_user: "codex"
+codex_fullname: "Codex Project Agent"
+codex_password_crypted: "$6$REPLACE_ME"
+codex_ssh_pubkey_path: "{{ lookup('env', 'HOME') + '/.ssh/id_ansible_ed25519.pub' }}"
+codex_ssh_pubkey: "{{ lookup('file', codex_ssh_pubkey_path) }}"
+codex_projects_dir: "/home/{{ codex_user }}/Projects"
+
+# Baseline tools available to Codex. Project-specific dependencies belong in
+# codex_extra_packages or a later project playbook.
+codex_base_packages:
+  - acl
+  - ansible-core
+  - bash-completion
+  - build-essential
+  - ca-certificates
+  - clang
+  - cloud-guest-utils
+  - curl
+  - fd-find
+  - file
+  - gdb
+  - gh
+  - git
+  - git-lfs
+  - jq
+  - less
+  - lsof
+  - make
+  - nano
+  - openssh-client
+  - openssh-server
+  - parted
+  - patch
+  - pkg-config
+  - python3
+  - python3-pip
+  - python3-venv
+  - python3-yaml
+  - ripgrep
+  - rsync
+  - shellcheck
+  - strace
+  - sudo
+  - tmux
+  - tree
+  - unzip
+  - vim
+  - wget
+  - zip
+codex_extra_packages: []
+
+# Repositories that are explicitly approved for this VM.
+# Leave empty until each project is intentionally added.
+codex_projects: []
+# Example:
+# codex_projects:
+#   - name: example
+#     repo: https://github.com/example/example.git
+#     version: main
+#     dest: /home/codex/Projects/example
+
+# Security posture
+ssh_allowed_source: "192.168.122.1"
+enable_ufw: true
+enable_unattended_upgrades: true
