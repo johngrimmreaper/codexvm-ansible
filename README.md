@@ -102,8 +102,9 @@ This project intentionally uses the Ubuntu netboot tarball, not the full
 live-server ISO. The VM boots the installer kernel and initrd directly with
 `virt-install --install kernel=...,initrd=...`.
 
-The NoCloud seed ISO remains attached as a small virtual CD-ROM so the installer
-can consume the rendered autoinstall `user-data` and `meta-data`.
+The NoCloud seed ISO is written under `/var/lib/libvirt/boot` and attached as
+a small virtual CD-ROM so the installer can consume the rendered autoinstall
+`user-data` and `meta-data`.
 
 ## Recreate intentionally
 

@@ -39,8 +39,8 @@ netboot_initrd_path: "{{ netboot_extract_dir }}/{{ ubuntu_arch }}/initrd"
 # Optional pinned checksum. Leave empty to skip get_url checksum enforcement.
 # Fill this after manually verifying a trusted download if you want pinning.
 netboot_sha256: ""
-seed_work_dir: "{{ playbook_dir }}/generated"
-seed_iso_path: "{{ seed_work_dir }}/codexvm-seed.iso"
+seed_work_dir: "/var/lib/libvirt/boot/{{ vm_name | lower }}-autoinstall"
+seed_iso_path: "/var/lib/libvirt/boot/{{ vm_name | lower }}-seed.iso"
 seed_user_data_path: "{{ seed_work_dir }}/user-data"
 seed_meta_data_path: "{{ seed_work_dir }}/meta-data"
 cleanup_seed_files_after_install: false
