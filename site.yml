@@ -551,6 +551,7 @@
           - status
       register: codex_ufw_status
       changed_when: false
+      when: enable_ufw | bool
 
     - name: Enable firewall
       ansible.builtin.command:
@@ -558,7 +559,9 @@
           - ufw
           - --force
           - enable
-      when: "'Status: active' not in codex_ufw_status.stdout"
+      when:
+        - enable_ufw | bool
+        - "'Status: active' not in codex_ufw_status.stdout"
 
     - name: Configure automatic security updates
       ansible.builtin.copy:
