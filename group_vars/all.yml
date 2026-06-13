@@ -80,6 +80,10 @@ codex_ssh_private_key_path: "{{ codex_ssh_pubkey_path | regex_replace('\\.pub$',
 codex_ssh_pubkey: "{{ lookup('file', codex_ssh_pubkey_path) }}"
 codex_projects_dir: "/home/{{ codex_user }}/Projects"
 
+# This VM is intentionally an isolated automation environment.
+# When true, the codex user can run sudo without an interactive password.
+codex_passwordless_sudo: true
+
 # Baseline tools available to Codex. Project-specific dependencies belong in
 # codex_extra_packages or a later project playbook.
 codex_base_packages:

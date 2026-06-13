@@ -331,6 +331,22 @@
   become: true
 
   tasks:
+    - name: Configure passwordless sudo for the Codex user
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-codex-passwordless
+        owner: root
+        group: root
+        mode: '0440'
+        content: "{{ codex_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        validate: /usr/sbin/visudo -cf %s
+      when: codex_passwordless_sudo | bool
+
+    - name: Remove passwordless sudo for the Codex user
+      ansible.builtin.file:
+        path: /etc/sudoers.d/90-codex-passwordless
+        state: absent
+      when: not codex_passwordless_sudo | bool
+
     - name: Configure full Ubuntu APT sources
       ansible.builtin.copy:
         dest: /etc/apt/sources.list.d/ubuntu.sources

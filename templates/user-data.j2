@@ -98,4 +98,9 @@ autoinstall:
     - python3
     - sudo
   updates: security
+{% if codex_passwordless_sudo | bool %}
+  late-commands:
+    - curtin in-target --target=/target -- /bin/sh -c 'printf "%s ALL=(ALL) NOPASSWD:ALL\\n" "{{ codex_user }}" > /etc/sudoers.d/90-codex-passwordless'
+    - curtin in-target --target=/target -- chmod 0440 /etc/sudoers.d/90-codex-passwordless
+{% endif %}
   shutdown: reboot
