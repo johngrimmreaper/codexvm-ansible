@@ -1,115 +1,261 @@
-# CodexVM Ansible project
+# Codex VM Ansible
 
-This project builds a headless, isolated Ubuntu 24.04.4 LTS virtual machine for OpenAI Codex CLI work using Ubuntu's small netboot tarball instead of the full live-server ISO.
+Ansible project for creating and maintaining an isolated Ubuntu VM for OpenAI Codex CLI work.
 
-## Designed disk geometry
+The goal is to keep Codex work inside a dedicated virtual machine instead of giving Codex direct access to the user's personal workstation environment.
 
-The guest uses legacy BIOS/SeaBIOS and an MSDOS/MBR partition table:
+## Current release
 
-- `/dev/vda1`: fixed 8 GiB Linux swap
-- `/dev/vda2`: ext4 `/`, using all remaining disk space
+Latest milestones:
 
-The root partition is last. Expanding the virtual disk therefore creates trailing free space immediately after `/dev/vda2`, allowing `growpart /dev/vda 2` followed by `resize2fs /dev/vda2`.
+- `v0.1.0` — first working Ubuntu 24.04.4 netboot-based Codex VM
+- `v0.1.1` — passwordless sudo and clean guest automation
+- `v0.1.2` — host-only Samba/SCP file sharing workflow
 
-## Isolation choices
+## What this project builds
 
-- Headless serial console; no SPICE clipboard or desktop integration
-- No virtiofs, 9p, host bind mounts, or shared folders
-- NAT through libvirt's `default` network
-- SSH key authentication only
-- SSH agent forwarding disabled
-- Inbound firewall permits SSH only from the libvirt host
-- Only repositories listed in `codex_projects` are cloned automatically
+The playbook creates or reuses a libvirt VM named `codexvm`.
 
-The VM isolates host files, but Codex still sends relevant prompts and project context to OpenAI. Only place approved project material in this VM.
+Current VM design:
 
-## Host prerequisites
+- Ubuntu 24.04.4
+- legacy BIOS / MBR boot
+- raw LVM-backed disk
+- 70 GiB disk
+- 8 GiB swap partition
+- ext4 root partition
+- headless serial console
+- static/reserved VM address: `192.168.122.60`
+- dedicated user: `codex`
+- project workspace: `/home/codex/Projects`
 
-The playbook installs the KVM/libvirt tools it needs. Before running it:
+## Installation method
 
-1. Ensure the public key configured by `codex_ssh_pubkey_path` exists.
-2. Check that `192.168.122.60` is unused on the libvirt `default` network.
-3. Review `group_vars/all.yml`.
+The VM is installed through Ubuntu netboot plus autoinstall.
 
-By default the playbook downloads the Ubuntu 24.04.4 AMD64 netboot tarball to
-`netboot_tarball_path` and extracts the installer kernel/initrd from it.
+The host stores the small Ubuntu netboot tarball under libvirt boot storage instead of keeping a full live-server ISO locally.
 
-The default disk is a sparse qcow2 image at `/var/lib/libvirt/images/codexvm.qcow2`. To use a raw LVM volume, set `vm_disk_backend: lvm` and create `/dev/vg_virtualmachines/codexvm` at 70 GiB first.
+The installer kernel receives a live-server ISO URL and downloads the live environment during installation.
 
-## Install
+Important generated installer artifacts live under:
 
-```bash
-cd codexvm-ansible
-./scripts/run-install.sh -vv
+```text
+/var/lib/libvirt/boot/
 ```
 
-The script asks for the VM account password, generates a SHA-512 password hash, passes only the hash through a temporary mode-0600 variables file, and deletes that file afterward.
+The NoCloud autoinstall seed is also generated under libvirt boot storage so QEMU can read it without permission problems.
 
-Watch the installer when needed:
+## What gets installed inside the VM
 
-```bash
-sudo virsh console CodexVM
+The VM is configured as a practical Codex work environment.
+
+Installed/configured inside the VM:
+
+- OpenSSH server
+- Vim
+- Nano
+- Alpine Pico
+- Midnight Commander
+- Git
+- Git LFS
+- baseline command-line development tools
+- OpenAI Codex CLI
+- UFW firewall
+- unattended upgrades
+- host-only Samba file sharing
+
+Codex CLI is installed for the `codex` user and exposed system-wide through:
+
+```text
+/usr/local/bin/codex -> /home/codex/.local/bin/codex
 ```
 
-Exit the serial console with `Ctrl+]`.
+## Security model
 
-## First Codex login
+The VM is intentionally isolated from the host.
+
+Network access is restricted with UFW.
+
+Allowed inbound access:
+
+```text
+22/tcp   from 192.168.122.1
+445/tcp  from 192.168.122.1
+```
+
+That means SSH/SCP/SFTP and Samba are reachable only from the libvirt host.
+
+The `codex` user has passwordless sudo because this VM is an automation environment.
+
+## SSH, SCP, and SFTP
+
+SSH access:
 
 ```bash
-ssh codex@192.168.122.60
+ssh codexvm
+```
+
+Copy a file into the VM:
+
+```bash
+scp file.txt codexvm:~/Projects/
+```
+
+Copy a directory into the VM:
+
+```bash
+scp -r my-project/ codexvm:~/Projects/
+```
+
+Copy a file back from the VM:
+
+```bash
+scp codexvm:~/Projects/file.txt .
+```
+
+SFTP also works through OpenSSH:
+
+```bash
+sftp codexvm
+```
+
+## Samba file sharing
+
+Samba exposes the Codex project workspace to the libvirt host only.
+
+Share:
+
+```text
+//192.168.122.60/CodexProjects
+```
+
+Guest write access is enabled, but Samba forces filesystem writes to the Linux user `codex`.
+
+The Samba server is minimal:
+
+- no printer shares
+- no `print$`
+- NetBIOS disabled
+- SMB port 445 only
+- access restricted to `192.168.122.1`
+
+List shares from the host:
+
+```bash
+smbclient -L //192.168.122.60 -N -m SMB3
+```
+
+Mount the share from the host:
+
+```bash
+mkdir -p ~/mnt/codexvm-projects
+
+sudo mount -t cifs //192.168.122.60/CodexProjects ~/mnt/codexvm-projects \
+  -o guest,uid=$(id -u),gid=$(id -g),vers=3.0
+```
+
+Unmount:
+
+```bash
+sudo umount ~/mnt/codexvm-projects
+```
+
+## Fresh VM creation
+
+Example fresh install using an LVM-backed disk:
+
+```bash
+cd ~/Projects/codexvm-ansible
+
+ANSIBLE_FORCE_COLOR=1 ansible-playbook -K -i inventory.ini site.yml \
+  -e '{"vm_disk_backend":"lvm","vm_lvm_path":"/dev/vg_workstation02/lv_codex","vm_disk_size_gb":70,"vm_force_recreate":true}' \
+  -e "codex_password_crypted=$HASH" \
+  -e "codex_ssh_pubkey_path=$HOME/.ssh/id_ansible_ed25519.pub" \
+  -vv
+```
+
+The `-K` option is needed for host-side sudo operations such as libvirt/LVM/installer artifact setup.
+
+## Re-run provisioning on an existing VM
+
+After the VM exists and passwordless sudo has been configured inside it, guest provisioning can be rerun without `-K`:
+
+```bash
+cd ~/Projects/codexvm-ansible
+
+ANSIBLE_FORCE_COLOR=1 ansible-playbook -i inventory.ini site.yml \
+  --limit codexvm \
+  -e "codex_ssh_pubkey_path=$HOME/.ssh/id_ansible_ed25519.pub" \
+  -vv
+```
+
+A clean run should finish with:
+
+```text
+changed=0
+failed=0
+```
+
+## Codex login
+
+Log into the VM:
+
+```bash
+ssh codexvm
+```
+
+Then authenticate Codex CLI:
+
+```bash
 codex login --device-auth
-cd ~/Projects
-codex
 ```
 
-The device-code flow lets you complete authentication in the browser on the host without installing a browser in the VM.
+## Important variables
 
-## Add specific projects
+Most defaults live in:
 
-Edit `codex_projects` in `group_vars/all.yml`. Example:
+```text
+group_vars/all.yml
+```
+
+Important variables include:
 
 ```yaml
-codex_projects:
-  - name: xscreensaver
-    repo: git@github.com:johngrimmreaper/xscreensaver.git
-    version: feature/mystify
-    dest: /home/codex/Projects/xscreensaver
+vm_name: codexvm
+vm_disk_size_gb: 70
+codex_user: codex
+codex_projects_dir: /home/codex/Projects
+codex_passwordless_sudo: true
+codex_enable_samba_share: true
+codex_samba_share_name: CodexProjects
+codex_samba_allow_from: 192.168.122.1
 ```
 
-Use a VM-specific GitHub key or token. Do not forward the host SSH agent into the VM.
+## File sharing design
 
-## Maintenance
+There are two supported file movement paths:
 
-```bash
-ansible-playbook -i inventory.ini maintain.yml -vv
-```
+1. SSH-based transfer:
+   - `scp`
+   - `sftp`
 
-This applies Ubuntu updates, upgrades Codex CLI by rerunning OpenAI's official standalone installer, and updates only repositories explicitly listed in `codex_projects`.
+2. Host-only Samba:
+   - useful for mounting `/home/codex/Projects` directly on the host
+   - restricted to the libvirt host
+   - guest writable
+   - forced to the `codex` Linux user
 
-## Grow from 70 GiB to 100 GiB
+## Project policy
 
-Review `new_disk_size_gb` in `grow-disk.yml`, then run:
+Keep this project focused.
 
-```bash
-ansible-playbook -i inventory.ini grow-disk.yml -e new_disk_size_gb=100 -vv
-```
+This playbook should remain a Codex VM builder and provisioner.
 
-After a successful growth, update `vm_disk_size_gb` in `group_vars/all.yml` to the new value.
+Avoid adding:
 
-## Netboot installer media
-
-This project intentionally uses the Ubuntu netboot tarball as host-side boot
-media, not the full live-server ISO. The VM boots the installer kernel and
-initrd directly with `virt-install --install kernel=...,initrd=...`.
-
-The netboot initrd still needs a live-server ISO URL in its kernel command line.
-That ISO is downloaded by the installer inside the VM and mounted as the live
-filesystem.
-
-The NoCloud seed ISO is written under `/var/lib/libvirt/boot` and attached as
-a small virtual CD-ROM so the installer can consume the rendered autoinstall
-`user-data` and `meta-data`.
-
-## Recreate intentionally
-
-Set `vm_force_recreate: true` only when you intend to destroy and reinstall the VM. For the qcow2 backend, this also deletes the old VM disk.
+- host helper scripts
+- Makefile targets
+- desktop environments
+- broad workstation personalization
+- unrelated services
+- unrelated development stacks
