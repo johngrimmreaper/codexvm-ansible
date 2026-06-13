@@ -1,0 +1,96 @@
+---
+# File sharing for the isolated Codex VM.
+#
+# SCP/SFTP is already provided by OpenSSH. This file adds an optional Samba
+# guest-write share, restricted to the libvirt host by Samba and UFW.
+
+- name: Install Samba file sharing packages
+  ansible.builtin.apt:
+    name:
+      - samba
+      - samba-common-bin
+    state: present
+  when: codex_enable_samba_share | bool
+
+- name: Ensure Samba share path exists
+  ansible.builtin.file:
+    path: "{{ codex_samba_share_path }}"
+    state: directory
+    owner: "{{ codex_user }}"
+    group: "{{ codex_user }}"
+    mode: '0775'
+  when: codex_enable_samba_share | bool
+
+- name: Configure host-only guest writable Samba share
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    marker: "# {mark} ANSIBLE MANAGED CODEX VM FILESHARING"
+    block: |
+      [global]
+         map to guest = Bad User
+         server min protocol = SMB2
+         smb ports = 445
+         disable netbios = yes
+         hosts allow = 127. {{ codex_samba_allow_from }}
+         hosts deny = ALL
+
+      [{{ codex_samba_share_name }}]
+         path = {{ codex_samba_share_path }}
+         browseable = yes
+         public = yes
+         guest ok = yes
+         guest only = yes
+         read only = no
+         writable = yes
+         force user = {{ codex_user }}
+         force group = {{ codex_user }}
+         create mask = {{ codex_samba_create_mask }}
+         directory mask = {{ codex_samba_directory_mask }}
+    validate: /usr/bin/testparm -s %s
+  notify: Restart Samba
+  when: codex_enable_samba_share | bool
+
+- name: Remove Codex Samba share when disabled
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    marker: "# {mark} ANSIBLE MANAGED CODEX VM FILESHARING"
+    state: absent
+    validate: /usr/bin/testparm -s %s
+  notify: Restart Samba
+  when: not codex_enable_samba_share | bool
+
+- name: Enable Samba file sharing service
+  ansible.builtin.service:
+    name: smbd
+    state: started
+    enabled: true
+  when: codex_enable_samba_share | bool
+
+- name: Disable NetBIOS name service
+  ansible.builtin.service:
+    name: nmbd
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: codex_enable_samba_share | bool
+
+- name: Allow Samba only from the libvirt host
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - from
+      - "{{ codex_samba_allow_from }}"
+      - to
+      - any
+      - port
+      - '445'
+      - proto
+      - tcp
+  register: codex_ufw_allow_samba
+  changed_when: >-
+    'Rule added' in codex_ufw_allow_samba.stdout
+    or 'Rules updated' in codex_ufw_allow_samba.stdout
+  when:
+    - enable_ufw | bool
+    - codex_enable_samba_share | bool

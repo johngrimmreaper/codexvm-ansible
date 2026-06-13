@@ -84,6 +84,15 @@ codex_projects_dir: "/home/{{ codex_user }}/Projects"
 # When true, the codex user can run sudo without an interactive password.
 codex_passwordless_sudo: true
 
+# Host-only file sharing.
+# SCP/SFTP already works through OpenSSH.
+codex_enable_samba_share: true
+codex_samba_share_name: "CodexProjects"
+codex_samba_share_path: "{{ codex_projects_dir }}"
+codex_samba_allow_from: "192.168.122.1"
+codex_samba_create_mask: "0664"
+codex_samba_directory_mask: "0775"
+
 # Baseline tools available to Codex. Project-specific dependencies belong in
 # codex_extra_packages or a later project playbook.
 codex_base_packages:
