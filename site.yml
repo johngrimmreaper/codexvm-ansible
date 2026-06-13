@@ -435,10 +435,26 @@
         name: "{{ codex_base_packages + codex_extra_packages }}"
         state: present
 
+    - name: Check whether Git LFS system filter is configured
+      ansible.builtin.command:
+        argv:
+          - git
+          - config
+          - --system
+          - --get
+          - filter.lfs.clean
+      register: codex_git_lfs_filter
+      failed_when: false
+      changed_when: false
+
     - name: Enable Git LFS
-      ansible.builtin.command: git lfs install --system
-      register: git_lfs_install
-      changed_when: "'Git LFS initialized' in git_lfs_install.stdout"
+      ansible.builtin.command:
+        argv:
+          - git
+          - lfs
+          - install
+          - --system
+      when: codex_git_lfs_filter.rc != 0
 
     - name: Create approved-project workspace
       ansible.builtin.file:
@@ -528,11 +544,21 @@
       register: ufw_allow_ssh
       changed_when: "'Rule added' in ufw_allow_ssh.stdout"
 
+    - name: Check firewall status
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - status
+      register: codex_ufw_status
+      changed_when: false
+
     - name: Enable firewall
-      ansible.builtin.command: ufw --force enable
-      when: enable_ufw | bool
-      register: ufw_enable
-      changed_when: "'enabled' in ufw_enable.stdout | lower"
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - --force
+          - enable
+      when: "'Status: active' not in codex_ufw_status.stdout"
 
     - name: Configure automatic security updates
       ansible.builtin.copy:
