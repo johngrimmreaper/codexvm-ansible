@@ -21,16 +21,29 @@
     mode: '0775'
   when: codex_enable_samba_share | bool
 
-- name: Configure host-only guest writable Samba share
-  ansible.builtin.blockinfile:
-    path: /etc/samba/smb.conf
-    marker: "# {mark} ANSIBLE MANAGED CODEX VM FILESHARING"
-    block: |
+- name: Configure minimal host-only Samba server
+  ansible.builtin.copy:
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
       [global]
+         server string = codexvm server
+         server role = standalone server
          map to guest = Bad User
+         usershare allow guests = yes
+
          server min protocol = SMB2
          smb ports = 445
          disable netbios = yes
+
+         load printers = no
+         printing = bsd
+         printcap name = /dev/null
+         disable spoolss = yes
+         show add printer wizard = no
+
          hosts allow = 127. {{ codex_samba_allow_from }}
          hosts deny = ALL
 
@@ -50,11 +63,30 @@
   notify: Restart Samba
   when: codex_enable_samba_share | bool
 
-- name: Remove Codex Samba share when disabled
-  ansible.builtin.blockinfile:
-    path: /etc/samba/smb.conf
-    marker: "# {mark} ANSIBLE MANAGED CODEX VM FILESHARING"
-    state: absent
+- name: Configure minimal Samba server without Codex share
+  ansible.builtin.copy:
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [global]
+         server string = codexvm server
+         server role = standalone server
+         map to guest = Bad User
+
+         server min protocol = SMB2
+         smb ports = 445
+         disable netbios = yes
+
+         load printers = no
+         printing = bsd
+         printcap name = /dev/null
+         disable spoolss = yes
+         show add printer wizard = no
+
+         hosts allow = 127. {{ codex_samba_allow_from }}
+         hosts deny = ALL
     validate: /usr/bin/testparm -s %s
   notify: Restart Samba
   when: not codex_enable_samba_share | bool
