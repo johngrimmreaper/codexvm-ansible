@@ -126,7 +126,21 @@ codex_extra_packages: []
 
 # Interactive terminal defaults for the shared VM image.
 # Override codex_default_editor to choose another editor.
-codex_enable_universe: true
+codex_manage_ubuntu_sources: true
+ubuntu_apt_archive_uri: "http://archive.ubuntu.com/ubuntu"
+ubuntu_apt_security_uri: "http://security.ubuntu.com/ubuntu"
+ubuntu_apt_components:
+  - main
+  - restricted
+  - universe
+  - multiverse
+ubuntu_apt_suites:
+  - "{{ ubuntu_codename }}"
+  - "{{ ubuntu_codename }}-updates"
+  - "{{ ubuntu_codename }}-backports"
+ubuntu_apt_security_suites:
+  - "{{ ubuntu_codename }}-security"
+
 codex_default_editor: "vim"
 codex_editor_packages:
   - vim

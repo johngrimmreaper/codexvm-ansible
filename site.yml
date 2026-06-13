@@ -331,32 +331,33 @@
   become: true
 
   tasks:
-    - name: Check whether Ubuntu universe repository is enabled
-      ansible.builtin.shell: |
-        grep -RhsE '(^Components: .*\\buniverse\\b)|(^deb .*\\buniverse\\b)' \
-          /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true
-      args:
-        executable: /bin/bash
-      register: codex_universe_enabled
-      changed_when: false
-      when: codex_enable_universe | bool
+    - name: Configure full Ubuntu APT sources
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/ubuntu.sources
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          Types: deb
+          URIs: {{ ubuntu_apt_archive_uri }}
+          Suites: {{ ubuntu_apt_suites | join(' ') }}
+          Components: {{ ubuntu_apt_components | join(' ') }}
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
-    - name: Install repository management tools
+          Types: deb
+          URIs: {{ ubuntu_apt_security_uri }}
+          Suites: {{ ubuntu_apt_security_suites | join(' ') }}
+          Components: {{ ubuntu_apt_components | join(' ') }}
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+      register: codex_apt_sources
+      when: codex_manage_ubuntu_sources | bool
+
+    - name: Refresh APT cache after configuring Ubuntu sources
       ansible.builtin.apt:
-        name: software-properties-common
-        state: present
         update_cache: true
       when:
-        - codex_enable_universe | bool
-        - (codex_universe_enabled.stdout | default('')) | length == 0
-
-    - name: Enable Ubuntu universe repository
-      ansible.builtin.command: add-apt-repository -y universe
-      register: codex_enable_universe_result
-      changed_when: true
-      when:
-        - codex_enable_universe | bool
-        - (codex_universe_enabled.stdout | default('')) | length == 0
+        - codex_manage_ubuntu_sources | bool
+        - codex_apt_sources.changed
 
     - name: Install interactive terminal editor tools
       ansible.builtin.apt:
