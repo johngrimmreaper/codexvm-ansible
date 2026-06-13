@@ -385,7 +385,7 @@
       environment:
         CODEX_DEFAULT_EDITOR: "{{ codex_default_editor }}"
       register: codex_editor_alternative
-      changed_when: "'changed ' in codex_editor_alternative.stdout"
+      changed_when: codex_editor_alternative.stdout.startswith("changed ")
       when: codex_default_editor | length > 0
 
     - name: Set codex shell editor environment
